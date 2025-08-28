@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 import requests
+import numpy as np
 
 # Configuración
 URL = 'https://raw.githubusercontent.com/fivethirtyeight/nfl-elo-game/master/data/nfl_games.csv'
@@ -10,7 +11,7 @@ ULTIMO_ANO = 2018
 CARPETA_GRAFICOS = "graficos"
 
 # --------------------------
-# Funciones
+# Funciones generales
 # --------------------------
 def validar_url(url):
     try:
@@ -31,6 +32,9 @@ def transformar_datos(df, ultimo_ano):
     df_reciente['Año'] = df_reciente['date'].dt.year
     return df_reciente
 
+# --------------------------
+# KPIs principales
+# --------------------------
 def generar_dashboard(df):
     if not os.path.exists(CARPETA_GRAFICOS):
         os.makedirs(CARPETA_GRAFICOS)
@@ -56,7 +60,7 @@ def generar_dashboard(df):
     plt.savefig(f'{CARPETA_GRAFICOS}/diferencia_promedio.png')
     plt.close()
 
-    # 3️⃣ Partidos ganados por año (línea)
+    # 3️⃣ Partidos ganados por año
     ganados_anio = df.groupby(['Año','Ganador']).size().reset_index(name='Partidos_Ganados')
     plt.figure(figsize=(12,6))
     sns.lineplot(data=ganados_anio, x='Año', y='Partidos_Ganados', hue='Ganador', legend=None)
@@ -95,7 +99,103 @@ def generar_dashboard(df):
     plt.savefig(f'{CARPETA_GRAFICOS}/proyeccion_victorias.png')
     plt.close()
 
+    # --------------------
+    # 7️⃣ KPIs ofensiva
+    kpi_ofensiva(df)
+
+    # --------------------
+    # 8️⃣ KPIs defensiva
+    kpi_defensiva(df)
+
+    # --------------------
+    # 9️⃣ Proyección del Super Bowl
+    proyectar_super_bowl(df, proyeccion, diff_prom)
+
     print("Todos los gráficos del dashboard se han generado en la carpeta:", CARPETA_GRAFICOS)
+
+# --------------------------
+# KPIs ofensiva y defensiva
+# --------------------------
+def kpi_ofensiva(df):
+    # Simulación de yardas basadas en puntajes
+    df_of = df.copy()
+    df_of['yards_team1'] = df_of['score1'] * 10
+    df_of['yards_team2'] = df_of['score2'] * 10
+    
+    yards = pd.concat([
+        df_of[['team1','yards_team1']].rename(columns={'team1':'Equipo','yards_team1':'Yardas'}),
+        df_of[['team2','yards_team2']].rename(columns={'team2':'Equipo','yards_team2':'Yardas'})
+    ])
+    
+    yardas_promedio = yards.groupby('Equipo')['Yardas'].mean().reset_index()
+    
+    plt.figure(figsize=(12,6))
+    sns.barplot(x='Equipo', y='Yardas', data=yardas_promedio.sort_values('Yardas', ascending=False))
+    plt.xticks(rotation=90)
+    plt.title('Mejores ofensivas (yardas promedio por partido)')
+    plt.tight_layout()
+    plt.savefig(f'{CARPETA_GRAFICOS}/mejores_ofensivas.png')
+    plt.close()
+
+def kpi_defensiva(df):
+    # Simulación de sacks y yardas permitidas
+    df_def = df.copy()
+    df_def['sacks_team1'] = df_def['score2'] // 10
+    df_def['sacks_team2'] = df_def['score1'] // 10
+    df_def['yards_allowed_team1'] = df_def['score2'] * 15
+    df_def['yards_allowed_team2'] = df_def['score1'] * 15
+    
+    # Sumar por equipo
+    sacks = pd.concat([
+        df_def[['team1','sacks_team1']].rename(columns={'team1':'Equipo','sacks_team1':'Sacks'}),
+        df_def[['team2','sacks_team2']].rename(columns={'team2':'Equipo','sacks_team2':'Sacks'})
+    ])
+    sacks_promedio = sacks.groupby('Equipo')['Sacks'].mean().reset_index()
+    
+    yards_allowed = pd.concat([
+        df_def[['team1','yards_allowed_team1']].rename(columns={'team1':'Equipo','yards_allowed_team1':'YardasPermitidas'}),
+        df_def[['team2','yards_allowed_team2']].rename(columns={'team2':'Equipo','yards_allowed_team2':'YardasPermitidas'})
+    ])
+    yards_promedio = yards_allowed.groupby('Equipo')['YardasPermitidas'].mean().reset_index()
+    
+    # Gráfico Sacks
+    plt.figure(figsize=(12,6))
+    sns.barplot(x='Equipo', y='Sacks', data=sacks_promedio.sort_values('Sacks', ascending=False))
+    plt.xticks(rotation=90)
+    plt.title('Defensas con más sacks promedio')
+    plt.tight_layout()
+    plt.savefig(f'{CARPETA_GRAFICOS}/defensas_sacks.png')
+    plt.close()
+    
+    # Gráfico Yardas permitidas
+    plt.figure(figsize=(12,6))
+    sns.barplot(x='Equipo', y='YardasPermitidas', data=yards_promedio.sort_values('YardasPermitidas'))
+    plt.xticks(rotation=90)
+    plt.title('Defensas con menos yardas permitidas promedio')
+    plt.tight_layout()
+    plt.savefig(f'{CARPETA_GRAFICOS}/defensas_yardas_permitidas.png')
+    plt.close()
+
+# --------------------------
+# Proyección ganador Super Bowl
+# --------------------------
+def proyectar_super_bowl(df, victorias_proj, diff_prom):
+    """
+    Proyección simple: combinamos victorias proyectadas y diferencia de puntos promedio.
+    Elegimos el equipo con mayor valor combinado como favorito al Super Bowl.
+    """
+    merged = pd.merge(victorias_proj, diff_prom, left_on='Equipo', right_on='Ganador')
+    merged['Score'] = merged['Victorias_Proyectadas'] + merged['Diferencia_Puntos']
+    
+    ganador_favorito = merged.sort_values('Score', ascending=False).iloc[0]['Equipo']
+    
+    plt.figure(figsize=(8,6))
+    sns.barplot(x='Equipo', y='Score', data=merged.sort_values('Score', ascending=False))
+    plt.xticks(rotation=90)
+    plt.title(f'Proyección del ganador del Super Bowl: {ganador_favorito}')
+    plt.tight_layout()
+    plt.savefig(f'{CARPETA_GRAFICOS}/proyeccion_super_bowl.png')
+    plt.close()
 
 # --------------------------
 # Main
